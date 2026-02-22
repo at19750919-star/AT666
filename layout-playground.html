@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>截圖排版沙盤</title>
+    
+    <!-- 原本的 <link rel="stylesheet" href="style.css" /> 已被移除 -->
+
+    <!-- ▼▼▼ CSS 樣式直接嵌入到這裡 ▼▼▼ -->
+    <style>
+      /* ===================================================================
+         截圖排版沙盤 (Layout Playground) 專用樣式
+         =================================================================== */
+
+      /* --- 頁面基礎設定 --- */
+      body.layout-playground {
+        margin: 0;
+        min-height: 100vh;
+        background: #05070d; /* 深藍黑背景 */
+        color: #f4f7ff; /* 亮白色系文字 */
+        font-family: "Segoe UI", "Noto Sans TC", sans-serif;
+        display: flex; /* 讓主要容器能居中 */
+      }
+
+      /* --- 主要外殼容器 --- */
+      .layout-shell {
+        width: min(1600px, 100%); /* 最大寬度 1600px，但不超過螢幕寬度 */
+        margin: 0 auto; /* 水平居中 */
+        flex: 1; /* 佔滿可用垂直空間 */
+        display: flex;
+        flex-direction: column; /* 垂直排列：上方工具列，下方畫布 */
+        gap: 12px; /* 工具列與畫布之間的間距 */
+        padding: 12px 16px 16px;
+        box-sizing: border-box;
+      }
+
+      /* --- 面板通用樣式 (工具列和畫布的共同外觀) --- */
+      .layout-panel {
+        background: #0b1425; /* 面板背景色 */
+        border: 1px solid #16233a; /* 邊框 */
+        border-radius: 18px; /* 圓角 */
+        padding: 16px;
+        box-shadow: 0 10px 45px rgba(6, 12, 25, 0.65); /* 立體陰影 */
+      }
+
+      /* --- 上方工具列 --- */
+      .control-dock {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 12px;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .control-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      /* --- 按鈕樣式 --- */
+      .layout-panel button,
+      .layout-panel .pill-btn {
+        background: #1d263d;
+        color: #dbe4ff;
+        border: 1px solid #2a3655;
+        border-radius: 999px; /* 膠囊形狀 */
+        padding: 8px 14px;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.2s ease, border 0.2s ease;
+      }
+
+      .layout-panel button:hover,
+      .layout-panel .pill-btn:hover {
+        background: #283151;
+        border-color: #3e4a6e;
+      }
+
+      /* --- 上傳按鈕 --- */
+      .upload-button {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #1f3c88; /* 藍色強調背景 */
+        color: #fff;
+        border-radius: 10px;
+        padding: 10px 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s ease;
+      }
+      .upload-button:hover { background: #284cab; }
+      .upload-button input {
+        position: absolute;
+        inset: 0;
+        opacity: 0; /* 隱藏原始的 file input */
+        cursor: pointer;
+      }
+
+      /* --- 縮放控制列 --- */
+      .zoom-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 4px;
+        flex-wrap: wrap;
+      }
+
+      .zoom-row input[type="range"] {
+        flex: 1; /* 佔滿剩餘空間 */
+        accent-color: #3b82f6; /* 滑桿顏色 */
+        min-width: 160px;
+      }
+
+      .zoom-badge {
+        min-width: 70px;
+        text-align: center;
+        font-variant-numeric: tabular-nums; /* 讓數字等寬，避免跳動 */
+        color: #8ab4ff;
+      }
+
+      /* --- 下方畫布區域 --- */
+      .board-wrapper {
+        position: relative;
+        background: radial-gradient(circle at top, rgba(59, 130, 246, 0.2), transparent 55%), #040916; /* 背景光暈效果 */
+        border-radius: 22px;
+        padding: 14px;
+        border: 1px solid #0f1a2f;
+        flex: 1; /* 佔滿剩餘的垂直空間 */
+      }
+
+      .board-drop {
+        position: relative;
+        height: clamp(520px, calc(100vh - 140px), 1400px); /* 響應式高度 */
+        border-radius: 18px;
+        border: 2px dashed #2b4c96; /* 虛線邊框 */
+        background-image: linear-gradient(rgba(27, 45, 93, 0.7) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(27, 45, 93, 0.7) 1px, transparent 1px); /* 格線背景 */
+        background-size: 60px 60px;
+        background-color: #060c1b;
+        overflow: hidden;
+      }
+
+      /* --- 畫布拖曳狀態 --- */
+      .board-drop.is-dragover {
+        border-color: #60a5fa; /* 拖曳懸停時邊框變亮 */
+        background-color: #0b1730;
+      }
+      .board-drop.is-dragging { cursor: grabbing; }
+
+      /* --- 畫布預留位置 (初始狀態) --- */
+      .board-placeholder {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: #7785a5;
+        text-align: center;
+        padding: 24px;
+        pointer-events: none;
+        z-index: 1;
+      }
+      .board-placeholder svg { width: 60px; height: 60px; opacity: 0.7; }
+      .board-placeholder strong { color: #a7bff4; }
+
+      /* --- 截圖圖層與圖框 --- */
+      #frameLayer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      .layout-frame {
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform-origin: top left;
+        cursor: grab;
+        border-radius: 12px;
+        box-shadow: 0 12px 30px rgba(5, 10, 24, 0.65);
+        pointer-events: auto;
+        z-index: 3;
+      }
+      .layout-frame.is-active {
+        outline: 2px solid rgba(96, 165, 250, 0.9); /* 選中時的藍色外框 */
+        box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.25), 0 12px 30px rgba(5, 10, 24, 0.65);
+      }
+      .layout-frame.is-dragging {
+        cursor: grabbing;
+        outline-color: rgba(250, 204, 21, 0.9); /* 拖曳時的黃色外框 */
+      }
+      .layout-frame img {
+        display: block;
+        max-width: none;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      /* --- 狀態與提示文字 --- */
+      .layout-status {
+        font-size: 14px;
+        color: #9fb0d8;
+        margin: 0;
+      }
+
+      .selection-hint {
+        font-size: 14px;
+        color: #c3d4ff;
+        white-space: nowrap;
+      }
+
+      /* --- 響應式設計 --- */
+      @media (max-width: 960px) {
+        .layout-shell { padding: 12px; }
+      }
+      @media (max-width: 720px) {
+        .board-drop {
+          min-height: 360px;
+          height: 360px;
+        }
+      }
+
+      /* --- (可選) 畫布背景疊加的卡片參考線 --- */
+      .card-overlay {
+        position: absolute;
+        inset: 18px;
+        display: grid;
+        grid-template-areas:
+          "primary secondary"
+          "tertiary tertiary";
+        grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.8fr);
+        grid-template-rows: minmax(220px, 0.55fr) minmax(200px, 0.45fr);
+        gap: 18px;
+        pointer-events: none;
+        z-index: 0;
+      }
+      .layout-card {
+        border-radius: 24px;
+        border: 1px solid rgba(45, 67, 112, 0.7);
+        background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(8, 19, 40, 0.45));
+        box-shadow: 0 15px 40px rgba(5, 11, 25, 0.75);
+      }
+      .card-primary { grid-area: primary; }
+      .card-secondary { grid-area: secondary; }
+      .card-tertiary { grid-area: tertiary; height: minmax(0, 1fr); }
+    </style>
+    <!-- ▲▲▲ CSS 樣式嵌入結束 ▲▲▲ -->
+
+  </head>
+  <body class="layout-playground">
+    <main class="layout-shell" data-layout-playground>
+      <section class="layout-panel control-dock" aria-label="工具列">
+        <div class="control-row">
+          <label class="upload-button">
+            <input type="file" accept="image/*" id="imageFileInput" />
+            <span>選擇圖片</span>
+          </label>
+          <button type="button" id="resetViewBtn">重設選取</button>
+          <button type="button" id="deleteFrameBtn">移除選取</button>
+          <button type="button" id="clearBoardBtn">清空畫布</button>
+          <button type="button" id="bringFrontBtn">置頂</button>
+          <button type="button" id="sendBackBtn">置底</button>
+        </div>
+        <div class="zoom-row">
+          <button type="button" class="pill-btn" data-zoom="out">縮小</button>
+          <input type="range" min="0.25" max="3" step="0.05" value="1" id="zoomRange" />
+          <button type="button" class="pill-btn" data-zoom="in">放大</button>
+          <span class="zoom-badge" id="zoomBadge">100%</span>
+          <span class="selection-hint" id="selectionHint">尚未選取圖片</span>
+        </div>
+        <p class="layout-status" id="layoutStatus">貼上一張截圖開始排版，想要更多就一直貼。</p>
+      </section>
+      <section class="layout-panel board-wrapper" aria-label="畫布">
+        <div class="board-drop" id="layoutBoard" tabindex="0" aria-live="polite">
+          <div class="card-overlay" aria-hidden="true">
+            <div class="layout-card card-primary"></div>
+            <div class="layout-card card-secondary"></div>
+            <div class="layout-card card-tertiary"></div>
+          </div>
+          <div class="board-placeholder" id="boardPlaceholder">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M12 5c.55 0 1 .45 1 1v5h5c.55 0 1 .45 1 1s-.45 1-1 1h-5v5c0 .55-.45 1-1 1s-1-.45-1-1v-5H6c-.55 0-1-.45-1-1s.45-1 1-1h5V6c0-.55.45-1 1-1z" />
+            </svg>
+            <strong>在這裡貼上截圖</strong>
+            <span>支援貼上、拖曳或從電腦選檔</span>
+          </div>
+          <div id="frameLayer"></div>
+        </div>
+      </section>
+    </main>
+    <script src="layout-playground.js" defer></script>
+  </body>
+</html>
