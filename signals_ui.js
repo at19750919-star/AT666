@@ -902,7 +902,7 @@ function multi_pass_candidates_from_cards_simple(card_pool) {
 // 完整複製原系統的AC段排列邏輯
 function pack_all_sensitive_and_segment(deck) {
     log(`🔍 開始處理：總共 ${deck.length} 張牌`, 'info');
-    
+
     const sim = new Simulator(deck);
     // 掃描所有敏感局
     const scanSensitive = (typeof scan_all_sensitive_rounds === 'function')
@@ -917,17 +917,28 @@ function pack_all_sensitive_and_segment(deck) {
     const used_pos = new Set();
     // 儲存 A 段敏感局
     const a_rounds = [];
-    
-    // 先把所有敏感局加入 A 段
+
+    // 4張局比例控制：讀取 UI 上限設定，預估總局數約 88 局
+    const fourCardRateLimit = (typeof getMaxFourCardRateSetting === 'function') ? getMaxFourCardRateSetting() : null;
+    const estimatedTotalRounds = 88;
+    const maxFourCardRounds = (fourCardRateLimit && fourCardRateLimit > 0)
+        ? Math.floor(estimatedTotalRounds * (fourCardRateLimit / 100))
+        : Infinity;
+    let fourCardCount = 0;
+
+    // 先把所有敏感局加入 A 段（按原始順序，但 4 張局達上限就跳過）
     for (const r of all_sensitive) {
         if (typeof shouldSkipSensitiveRound === 'function' && shouldSkipSensitiveRound(r)) continue;
         // 如果這局有用過的牌就跳過
         if (r.cards.some(c => used_pos.has(c.pos))) continue;
+        // 4張局已達上限就跳過
+        if (r.cards.length === 4 && fourCardCount >= maxFourCardRounds) continue;
         r.segment = 'A';
         a_rounds.push(r);
         r.cards.forEach(c => used_pos.add(c.pos));
+        if (r.cards.length === 4) fourCardCount++;
     }
-    log(`🔍 自然敏感局加入完成：A段 ${a_rounds.length} 局，已用牌 ${used_pos.size} 張`, 'info');
+    log(`🔍 自然敏感局加入完成：A段 ${a_rounds.length} 局(4張=${fourCardCount})，已用牌 ${used_pos.size} 張`, 'info');
     
     // 持續多重洗牌挑選敏感局
     const MAX_MULTI_PASS_ATTEMPTS = 200;
@@ -958,6 +969,7 @@ function pack_all_sensitive_and_segment(deck) {
                     finalRound.segment = 'A';
                     a_rounds.push(finalRound);
                     orderedOriginalCards.forEach(card => used_pos.add(card.pos));
+                    if (last.cards.length === 4) fourCardCount++;
                     break;
                 }
             }
@@ -965,8 +977,11 @@ function pack_all_sensitive_and_segment(deck) {
         }
         
         const cands = multi_pass_candidates_from_cards_simple(remaining);
+        // 4 張局已達上限就跳過
         const picked = Array.isArray(cands)
-            ? cands.find(r => Array.isArray(r.cards) && r.cards.length > 0 && !r.cards.some(c => used_pos.has(c.pos)))
+            ? cands.find(r => Array.isArray(r.cards) && r.cards.length > 0
+                && !r.cards.some(c => used_pos.has(c.pos))
+                && !(r.cards.length === 4 && fourCardCount >= maxFourCardRounds))
             : cands;
             
         // 檢查挑出來的敏感局是否合法
@@ -985,6 +1000,7 @@ function pack_all_sensitive_and_segment(deck) {
         picked.segment = 'A';
         a_rounds.push(picked);
         picked.cards.forEach(c => used_pos.add(c.pos));
+        if (picked.cards.length === 4) fourCardCount++;
             added++;
     }
         if (added > 0) {

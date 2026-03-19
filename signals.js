@@ -2769,6 +2769,78 @@ function verifyShoeRules(rounds, options = {}) {
         }
     }
 
+    // 規則 2/5: 自動修復訊號牌違規（對調下一局前兩張）
+    if (allowMutations) {
+        log('--- 訊號牌違規自動修復 ---', 'info');
+        let signalFixed = 0;
+        let signalUnfixed = 0;
+        for (let i = 0; i < rounds.length; i++) {
+            const current_round = rounds[i];
+            if (!current_round || !current_round.cards) continue;
+            const nextIdx = (i + 1) % rounds.length;
+            const next_round = rounds[nextIdx];
+            if (!next_round || !next_round.cards) continue;
+
+            const is_t_round = Boolean(current_round.isT || hasFullHouse(current_round));
+            const has_signal = current_round.cards.some(card => card.isSignalCard());
+            const true_result_next = getTrueResult(next_round);
+
+            let needFix = false;
+            let expectedResult = null;
+            if (is_t_round) {
+                if (true_result_next !== '和') { needFix = true; expectedResult = '和'; }
+            } else if (has_signal) {
+                if (true_result_next !== '莊') { needFix = true; expectedResult = '莊'; }
+            } else {
+                if (true_result_next === '莊') { needFix = true; expectedResult = '非莊'; }
+            }
+
+            if (!needFix) continue;
+
+            // 嘗試對調下一局前兩張
+            const swapped = swapFirstTwoCards(next_round);
+            let shouldSwap = false;
+            if (expectedResult === '和' && swapped === '和') shouldSwap = true;
+            else if (expectedResult === '莊' && swapped === '莊') shouldSwap = true;
+            else if (expectedResult === '非莊' && swapped && swapped !== '莊') shouldSwap = true;
+
+            if (shouldSwap) {
+                executeCardSwap(next_round);
+                if (typeof recomputeRoundOutcome === 'function') recomputeRoundOutcome(next_round);
+                else next_round.result = swapped;
+                signalFixed++;
+                log(`✅ 第 ${i + 1} 局訊號牌違規：對調第 ${nextIdx + 1} 局前兩張 (${true_result_next} → ${swapped})`, 'success');
+            } else {
+                signalUnfixed++;
+            }
+        }
+        if (signalFixed > 0) {
+            log(`✅ 已自動修復 ${signalFixed} 個訊號牌違規`, 'success');
+            if (typeof window !== 'undefined') window.__roundsModified = true;
+        }
+        if (signalUnfixed > 0) {
+            log(`⚠️ ${signalUnfixed} 個訊號牌違規無法自動修復（對調後不符合預期），需手動處理`, 'warn');
+        }
+    }
+
+    // 修復結果欄位不一致（result 與實際點數不符）
+    if (allowMutations) {
+        let resultFixed = 0;
+        for (let i = 0; i < rounds.length; i++) {
+            const r = rounds[i];
+            if (!r || !r.cards) continue;
+            const trueResult = getTrueResult(r);
+            if (r.result !== trueResult && trueResult !== '未知' && trueResult !== '錯誤') {
+                r.result = trueResult;
+                resultFixed++;
+            }
+        }
+        if (resultFixed > 0) {
+            log(`✅ 已修正 ${resultFixed} 局結果欄位不一致`, 'success');
+            if (typeof window !== 'undefined') window.__roundsModified = true;
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════
     // 第三階段：修復後檢查（檢查受自動修復影響的規則）
     // ═══════════════════════════════════════════════════════════
@@ -4099,7 +4171,7 @@ function distributeRemainingCards(rounds, remainingCards) {
         return rounds;
     }
 
-    log(`⚙️ [殘牌處理] 開始分配 ${remainingCards.length} 張殘牌`, 'info');
+    // log(`⚙️ [殘牌處理] 開始分配 ${remainingCards.length} 張殘牌`, 'info');
 
     if (!Array.isArray(rounds) || rounds.length === 0) {
         log('無法分配殘牌：沒有可用的局', 'error');
