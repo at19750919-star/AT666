@@ -283,27 +283,42 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 6px 12px;
+        padding: 4px 8px;
         background: rgba(30, 41, 59, 0.9);
         flex-shrink: 0;
+        height: 32px;
+        box-sizing: border-box;
       }
       .grid-fullscreen-overlay .fullscreen-topbar .fs-title {
         color: #94a3b8;
-        font-size: 14px;
+        font-size: 13px;
       }
       .grid-fullscreen-overlay .fullscreen-close-btn {
         background: #ef4444;
         color: white;
         border: none;
-        border-radius: 8px;
-        padding: 6px 16px;
-        font-size: 16px;
+        border-radius: 6px;
+        padding: 3px 12px;
+        font-size: 14px;
         cursor: pointer;
       }
       .grid-fullscreen-overlay .fullscreen-grid-wrap {
         flex: 1;
         overflow: auto;
-        padding: 4px;
+        padding: 2px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+      }
+      @media (max-width: 768px) {
+        .grid-fullscreen-overlay .fullscreen-topbar {
+          height: 28px;
+          padding: 2px 6px;
+        }
+        .grid-fullscreen-overlay .fullscreen-close-btn {
+          font-size: 12px;
+          padding: 2px 8px;
+        }
       }
       .fs-grid-clone {
         --grid-cols: 16;
@@ -3915,21 +3930,21 @@
         const fsCols = 16;
         clone.style.setProperty("--grid-cols", fsCols);
 
-        // 計算全螢幕下的格子大小（去掉上方 bar 約 40px）
+        // 計算全螢幕下的格子大小，寬高都要 fit
+        const topBarH = 36;
+        const padV = 8;
         const availW = window.innerWidth - 8;
-        const availH = window.innerHeight - 48;
+        const availH = window.innerHeight - topBarH - padV;
         const colGap = 2;
         const rowGap = 6;
+        // 總 grid 行數 = label 行數（每個 label 佔一行）
+        const labelCount = clone.querySelectorAll(".grid-row-label").length;
+        const gridRows = labelCount; // 每個 label 代表一行資料
         const cellFromW = Math.floor((availW - (fsCols - 1) * colGap) / fsCols);
-        // 計算總行數
-        const totalCells = clone.children.length;
-        const labelCells = clone.querySelectorAll(".grid-row-label").length;
-        const dataCells = totalCells - labelCells;
-        const dataCols = fsCols - 1;
-        const rows = Math.ceil(dataCells / dataCols);
-        const cellFromH = rows > 0 ? Math.floor((availH - (rows - 1) * rowGap) / rows) : 999;
-        const cellSize = Math.max(20, Math.min(cellFromW, cellFromH));
+        const cellFromH = gridRows > 0 ? Math.floor((availH - (gridRows - 1) * rowGap) / gridRows) : 999;
+        const cellSize = Math.max(12, Math.min(cellFromW, cellFromH));
         clone.style.setProperty("--grid-row-size", cellSize + "px");
+        clone.style.setProperty("--grid-row-gap", Math.min(rowGap, Math.max(1, Math.floor(cellSize * 0.08))) + "px");
 
         fsOverlay.classList.add("show");
         document.body.style.overflow = "hidden";
