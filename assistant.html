@@ -3804,19 +3804,21 @@
         const fnSpan = document.getElementById("current-file-name");
         fsTitle.textContent = fnSpan ? fnSpan.textContent : "";
 
+        // 固定 15 格資料 + 1 標籤 = 16 欄
+        const fsCols = 16;
+        clone.style.setProperty("--grid-cols", fsCols);
+
         // 計算全螢幕下的格子大小（去掉上方 bar 約 40px）
         const availW = window.innerWidth - 8;
         const availH = window.innerHeight - 48;
-        const style = getComputedStyle(srcGrid);
-        const cols = parseInt(style.getPropertyValue("--grid-cols")) || 16;
         const colGap = 2;
         const rowGap = 6;
-        const cellFromW = Math.floor((availW - (cols - 1) * colGap) / cols);
+        const cellFromW = Math.floor((availW - (fsCols - 1) * colGap) / fsCols);
         // 計算總行數
         const totalCells = clone.children.length;
         const labelCells = clone.querySelectorAll(".grid-row-label").length;
         const dataCells = totalCells - labelCells;
-        const dataCols = cols - 1;
+        const dataCols = fsCols - 1;
         const rows = Math.ceil(dataCells / dataCols);
         const cellFromH = rows > 0 ? Math.floor((availH - (rows - 1) * rowGap) / rows) : 999;
         const cellSize = Math.max(20, Math.min(cellFromW, cellFromH));
