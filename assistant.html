@@ -271,7 +271,7 @@
         border-radius: 6px;
         background-color: rgba(240, 240, 240, 0.08);
         border: 5px solid transparent;
-        font-size: calc(var(--grid-row-size) * 0.55);
+        font-size: calc(var(--grid-row-size) * 0.72);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -324,7 +324,11 @@
         color: #1e293b;
       }
       .grid-cell.signal-card {
-        color: #ff0000;
+        color: #1e293b;
+        font-weight: 700;
+      }
+      .grid-cell.rank-a2 {
+        color: #ff0000 !important;
         font-weight: 700;
       }
       .grid-cell.grid-cell-active {
@@ -2961,6 +2965,8 @@
                 if (backColor === "R") cell.classList.add("card-red");
                 if (backColor === "B") cell.classList.add("card-blue");
                 if (card.isSignal) cell.classList.add("signal-card");
+                const rankUpper = String(card.rank).toUpperCase();
+                if (rankUpper === 'A' || rankUpper === '2') cell.classList.add("rank-a2");
                 gridContainer.appendChild(cell);
                 gridCells[cardIndex] = cell;
                 cardIndex += 1;

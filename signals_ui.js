@@ -740,6 +740,20 @@ if (suits.length === 0) {
     const expectedTotal = updated.suits.length * updated.ranks.length * 8;
     
     log(`訊號設定已更新:花色[${updated.suits.join(',')}] 數字[${updated.ranks.join(',')}] (預計訊號牌總數:${expectedTotal}張)`, 'success');
+    updateSignalConfigDisplay();
+}
+
+// 更新訊號牌設定顯示
+function updateSignalConfigDisplay() {
+    const el = document.getElementById('signalConfigDisplay');
+    if (!el) return;
+    const suits = (SIGNAL_CONFIG.suits || []).join('');
+    const ranks = (SIGNAL_CONFIG.ranks || []).join(',');
+    if (suits && ranks) {
+        el.textContent = `${suits} × ${ranks}`;
+    } else {
+        el.textContent = '';
+    }
 }
 
 // 根據傳入設定或 UI 直接更新訊號配置
@@ -752,6 +766,7 @@ function updateSignalConfig(newConfig) {
         const ranks = Array.isArray(newConfig.ranks) ? newConfig.ranks : SIGNAL_CONFIG.ranks;
         persistSignalConfig({ suits, ranks });
         syncUiFromSignalConfig();
+        updateSignalConfigDisplay();
         return;
     }
 
@@ -817,6 +832,13 @@ function syncUiFromSignalConfig() {
     if (typeof updateSignalCardCount === 'function') {
         updateSignalCardCount();
     }
+    // 更新訊號牌設定顯示文字
+    const configEl = document.getElementById('signalConfigDisplay');
+    if (configEl) {
+        const suitStr = suits.join('');
+        const rankStr = ranks.join(',');
+        configEl.textContent = (suitStr && rankStr) ? `${suitStr} × ${rankStr}` : '';
+    }
 }
 
 
@@ -834,6 +856,9 @@ if (typeof window !== 'undefined') {
     }
     if (typeof window.clearSignalSelections !== 'function') {
         window.clearSignalSelections = clearSignalSelections;
+    }
+    if (typeof window.updateSignalConfigDisplay !== 'function') {
+        window.updateSignalConfigDisplay = updateSignalConfigDisplay;
     }
 }
 
@@ -1862,6 +1887,7 @@ if (typeof window !== 'undefined') {
 
             setEditButtonsAvailability(false);
             renderDeckSummary(null);
+            updateSignalConfigDisplay();
             log('訊號牌測試系統初始化完成', 'success');
         };
         // Immediately initialise the UI. The script tag is placed at the end of
@@ -3071,7 +3097,7 @@ async function exportRoundsAsExcel() {
         const wb = new ExcelJS.Workbook();
 
         const ws1 = wb.addWorksheet('預覽');
-        ws1.properties.defaultRowHeight = 36;
+        ws1.properties.defaultRowHeight = 27;
         ws1.pageSetup = {
             paperSize: 9,
             orientation: 'portrait',
@@ -3080,7 +3106,8 @@ async function exportRoundsAsExcel() {
             fitToHeight: 1,
             horizontalCentered: true,
             verticalCentered: true,
-            margins: { left: 0.1, right: 0.1, top: 0.12, bottom: 0.12, header: 0.1, footer: 0.1 }
+            margins: { left: 0.15, right: 0.15, top: 0.2, bottom: 0.2, header: 0.1, footer: 0.1 },
+            printArea: null
         };
 
         const COLS = 21;
@@ -3088,9 +3115,9 @@ async function exportRoundsAsExcel() {
         const GROUP = PREVIEW_GRID_GROUP;
         const columnWidths = [];
         for (let colIndex = 0; colIndex < COLS; colIndex++) {
-            columnWidths.push(4);
+            columnWidths.push(4.8);
             if ((colIndex + 1) % GROUP === 0 && colIndex < COLS - 1) {
-                columnWidths.push(1);
+                columnWidths.push(1.2);
             }
         }
         columnWidths.forEach((width, index) => {
@@ -3111,7 +3138,7 @@ async function exportRoundsAsExcel() {
                 const wsCell = ws1.getCell(r + 1, sheetCol);
                 wsCell.value = cellData.value || '';
                 wsCell.alignment = { vertical: 'middle', horizontal: 'center' };
-                wsCell.font = { size: 22, bold: true, color: { argb: 'FF000000' } };
+                wsCell.font = { size: 16, bold: true, color: { argb: 'FF000000' } };
                 wsCell.border = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
 
                 const classes = cellData.className || '';
@@ -3142,6 +3169,14 @@ async function exportRoundsAsExcel() {
                 if (classes.includes('tbox-bottom')) wsCell.border.bottom = borderBold;
             }
         }
+
+        // 設定列印範圍：精確覆蓋資料區域
+        const totalSheetCols = COLS + Math.floor((COLS - 1) / GROUP);
+        const lastColLetter = String.fromCharCode(64 + (totalSheetCols > 26 ? 0 : totalSheetCols));
+        const lastColStr = totalSheetCols > 26
+            ? String.fromCharCode(64 + Math.floor((totalSheetCols - 1) / 26)) + String.fromCharCode(65 + ((totalSheetCols - 1) % 26))
+            : String.fromCharCode(64 + totalSheetCols);
+        ws1.pageSetup.printArea = `A1:${lastColStr}${ROWS}`;
 
         const ws2 = wb.addWorksheet('原始數據');
         const headers = ['局號', '段標', '色序', '卡片1', '卡片2', '卡片3', '卡片4', '卡片5', '卡片6', '結果', '訊號'];
