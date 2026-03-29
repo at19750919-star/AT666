@@ -740,6 +740,20 @@ if (suits.length === 0) {
     const expectedTotal = updated.suits.length * updated.ranks.length * 8;
     
     log(`訊號設定已更新:花色[${updated.suits.join(',')}] 數字[${updated.ranks.join(',')}] (預計訊號牌總數:${expectedTotal}張)`, 'success');
+    updateSignalConfigDisplay();
+}
+
+// 更新訊號牌設定顯示
+function updateSignalConfigDisplay() {
+    const el = document.getElementById('signalConfigDisplay');
+    if (!el) return;
+    const suits = (SIGNAL_CONFIG.suits || []).join('');
+    const ranks = (SIGNAL_CONFIG.ranks || []).join(',');
+    if (suits && ranks) {
+        el.textContent = `${suits} × ${ranks}`;
+    } else {
+        el.textContent = '';
+    }
 }
 
 // 根據傳入設定或 UI 直接更新訊號配置
@@ -752,6 +766,7 @@ function updateSignalConfig(newConfig) {
         const ranks = Array.isArray(newConfig.ranks) ? newConfig.ranks : SIGNAL_CONFIG.ranks;
         persistSignalConfig({ suits, ranks });
         syncUiFromSignalConfig();
+        updateSignalConfigDisplay();
         return;
     }
 
@@ -817,6 +832,13 @@ function syncUiFromSignalConfig() {
     if (typeof updateSignalCardCount === 'function') {
         updateSignalCardCount();
     }
+    // 更新訊號牌設定顯示文字
+    const configEl = document.getElementById('signalConfigDisplay');
+    if (configEl) {
+        const suitStr = suits.join('');
+        const rankStr = ranks.join(',');
+        configEl.textContent = (suitStr && rankStr) ? `${suitStr} × ${rankStr}` : '';
+    }
 }
 
 
@@ -834,6 +856,9 @@ if (typeof window !== 'undefined') {
     }
     if (typeof window.clearSignalSelections !== 'function') {
         window.clearSignalSelections = clearSignalSelections;
+    }
+    if (typeof window.updateSignalConfigDisplay !== 'function') {
+        window.updateSignalConfigDisplay = updateSignalConfigDisplay;
     }
 }
 
@@ -926,6 +951,29 @@ function pack_all_sensitive_and_segment(deck) {
         : Infinity;
     let fourCardCount = 0;
 
+    // 七點逆轉上限控制
+    const max7PtInput = document.getElementById('max7PtReversal');
+    const max7PtLimit = max7PtInput && max7PtInput.value !== '' ? parseInt(max7PtInput.value) : null;
+    let sevenPtReversalCount = 0;
+
+    const is7PtReversal = (round) => {
+        if (!round || !Array.isArray(round.cards) || round.cards.length < 5) return false;
+        if (!round.result || round.result === '和') return false;
+        const pt = (c) => {
+            if (!c) return 0;
+            const rank = c.rank || c.value;
+            if (['K', 'Q', 'J', 'T', '10', '0'].includes(rank)) return 0;
+            if (rank === 'A' || rank === '1') return 1;
+            return parseInt(rank) || 0;
+        };
+        const pi = (pt(round.cards[0]) + pt(round.cards[2])) % 10;
+        const bi = (pt(round.cards[1]) + pt(round.cards[3])) % 10;
+        if (pi >= 8 || bi >= 8) return false;
+        if (pi !== 7 && bi !== 7) return false;
+        const who7 = pi === 7 ? '閒' : '莊';
+        return (who7 === '閒' && round.result === '莊') || (who7 === '莊' && round.result === '閒');
+    };
+
     // 先把所有敏感局加入 A 段（按原始順序，但 4 張局達上限就跳過）
     for (const r of all_sensitive) {
         if (typeof shouldSkipSensitiveRound === 'function' && shouldSkipSensitiveRound(r)) continue;
@@ -933,10 +981,13 @@ function pack_all_sensitive_and_segment(deck) {
         if (r.cards.some(c => used_pos.has(c.pos))) continue;
         // 4張局已達上限就跳過
         if (r.cards.length === 4 && fourCardCount >= maxFourCardRounds) continue;
+        // 七點逆轉已達上限就跳過
+        if (max7PtLimit !== null && is7PtReversal(r) && sevenPtReversalCount >= max7PtLimit) continue;
         r.segment = 'A';
         a_rounds.push(r);
         r.cards.forEach(c => used_pos.add(c.pos));
         if (r.cards.length === 4) fourCardCount++;
+        if (is7PtReversal(r)) sevenPtReversalCount++;
     }
     log(`🔍 自然敏感局加入完成：A段 ${a_rounds.length} 局(4張=${fourCardCount})，已用牌 ${used_pos.size} 張`, 'info');
     
@@ -966,10 +1017,15 @@ function pack_all_sensitive_and_segment(deck) {
                     });
                     const startPos = orderedOriginalCards.length ? orderedOriginalCards[0].pos : 0;
                     const finalRound = makeRoundInfo(startPos, orderedOriginalCards, last.result, true);
+                    // 七點逆轉已達上限就跳過
+                    if (max7PtLimit !== null && is7PtReversal(finalRound) && sevenPtReversalCount >= max7PtLimit) {
+                        return null;
+                    }
                     finalRound.segment = 'A';
                     a_rounds.push(finalRound);
                     orderedOriginalCards.forEach(card => used_pos.add(card.pos));
                     if (last.cards.length === 4) fourCardCount++;
+                    if (is7PtReversal(finalRound)) sevenPtReversalCount++;
                     break;
                 }
             }
@@ -977,11 +1033,12 @@ function pack_all_sensitive_and_segment(deck) {
         }
         
         const cands = multi_pass_candidates_from_cards_simple(remaining);
-        // 4 張局已達上限就跳過
+        // 4 張局已達上限就跳過，七點逆轉已達上限也跳過
         const picked = Array.isArray(cands)
             ? cands.find(r => Array.isArray(r.cards) && r.cards.length > 0
                 && !r.cards.some(c => used_pos.has(c.pos))
-                && !(r.cards.length === 4 && fourCardCount >= maxFourCardRounds))
+                && !(r.cards.length === 4 && fourCardCount >= maxFourCardRounds)
+                && !(max7PtLimit !== null && is7PtReversal(r) && sevenPtReversalCount >= max7PtLimit))
             : cands;
             
         // 檢查挑出來的敏感局是否合法
@@ -1001,6 +1058,7 @@ function pack_all_sensitive_and_segment(deck) {
         a_rounds.push(picked);
         picked.cards.forEach(c => used_pos.add(c.pos));
         if (picked.cards.length === 4) fourCardCount++;
+        if (is7PtReversal(picked)) sevenPtReversalCount++;
             added++;
     }
         if (added > 0) {
@@ -1011,6 +1069,9 @@ function pack_all_sensitive_and_segment(deck) {
     log('🔍 開始多重洗牌挑選敏感局', 'info');
     harvestAdditionalSensitiveRounds();
     log(`🔍 多重洗牌結束：A段 ${a_rounds.length} 局，已用牌 ${used_pos.size} 張`, 'info');
+    if (max7PtLimit !== null) {
+        log(`🔍 七點逆轉：${sevenPtReversalCount} 局（上限=${max7PtLimit}）`, 'info');
+    }
       
     a_rounds.sort((a, b) => a.start_index - b.start_index);
     
@@ -1862,6 +1923,7 @@ if (typeof window !== 'undefined') {
 
             setEditButtonsAvailability(false);
             renderDeckSummary(null);
+            updateSignalConfigDisplay();
             log('訊號牌測試系統初始化完成', 'success');
         };
         // Immediately initialise the UI. The script tag is placed at the end of
@@ -3071,7 +3133,7 @@ async function exportRoundsAsExcel() {
         const wb = new ExcelJS.Workbook();
 
         const ws1 = wb.addWorksheet('預覽');
-        ws1.properties.defaultRowHeight = 36;
+        ws1.properties.defaultRowHeight = 27;
         ws1.pageSetup = {
             paperSize: 9,
             orientation: 'portrait',
@@ -3080,7 +3142,8 @@ async function exportRoundsAsExcel() {
             fitToHeight: 1,
             horizontalCentered: true,
             verticalCentered: true,
-            margins: { left: 0.1, right: 0.1, top: 0.12, bottom: 0.12, header: 0.1, footer: 0.1 }
+            margins: { left: 0.15, right: 0.15, top: 0.2, bottom: 0.2, header: 0.1, footer: 0.1 },
+            printArea: null
         };
 
         const COLS = 21;
@@ -3088,9 +3151,9 @@ async function exportRoundsAsExcel() {
         const GROUP = PREVIEW_GRID_GROUP;
         const columnWidths = [];
         for (let colIndex = 0; colIndex < COLS; colIndex++) {
-            columnWidths.push(4);
+            columnWidths.push(4.8);
             if ((colIndex + 1) % GROUP === 0 && colIndex < COLS - 1) {
-                columnWidths.push(1);
+                columnWidths.push(1.2);
             }
         }
         columnWidths.forEach((width, index) => {
@@ -3111,7 +3174,7 @@ async function exportRoundsAsExcel() {
                 const wsCell = ws1.getCell(r + 1, sheetCol);
                 wsCell.value = cellData.value || '';
                 wsCell.alignment = { vertical: 'middle', horizontal: 'center' };
-                wsCell.font = { size: 22, bold: true, color: { argb: 'FF000000' } };
+                wsCell.font = { size: 16, bold: true, color: { argb: 'FF000000' } };
                 wsCell.border = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
 
                 const classes = cellData.className || '';
@@ -3142,6 +3205,14 @@ async function exportRoundsAsExcel() {
                 if (classes.includes('tbox-bottom')) wsCell.border.bottom = borderBold;
             }
         }
+
+        // 設定列印範圍：精確覆蓋資料區域
+        const totalSheetCols = COLS + Math.floor((COLS - 1) / GROUP);
+        const lastColLetter = String.fromCharCode(64 + (totalSheetCols > 26 ? 0 : totalSheetCols));
+        const lastColStr = totalSheetCols > 26
+            ? String.fromCharCode(64 + Math.floor((totalSheetCols - 1) / 26)) + String.fromCharCode(65 + ((totalSheetCols - 1) % 26))
+            : String.fromCharCode(64 + totalSheetCols);
+        ws1.pageSetup.printArea = `A1:${lastColStr}${ROWS}`;
 
         const ws2 = wb.addWorksheet('原始數據');
         const headers = ['局號', '段標', '色序', '卡片1', '卡片2', '卡片3', '卡片4', '卡片5', '卡片6', '結果', '訊號'];

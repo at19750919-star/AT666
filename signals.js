@@ -235,7 +235,7 @@ const ENABLE_PREFLIGHT_REGENERATE = false;
 const SIGNAL_STORAGE_KEY = 'signal_config';
 const VALID_SUITS = ['♠', '♥', '♦', '♣'];
 const VALID_RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-const SIGNAL_DEFAULT_CONFIG = { suits: [], ranks: [] };
+const SIGNAL_DEFAULT_CONFIG = { suits: ['♠','♥','♦','♣'], ranks: ['A','2'] };
 const SUIT_SYMBOL_TO_LETTER_MAP = { '♠': 'S', '♥': 'H', '♦': 'D', '♣': 'C', 'S': 'S', 'H': 'H', 'D': 'D', 'C': 'C' };
 const SUIT_LETTER_TO_SYMBOL_MAP = { S: '♠', H: '♥', D: '♦', C: '♣' };
 const SIGNAL_RANKS_ORDER = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
@@ -266,6 +266,18 @@ function loadInitialSignalConfig() {
         const stored = window.localStorage.getItem(SIGNAL_STORAGE_KEY);
         if (!stored) return { ...SIGNAL_DEFAULT_CONFIG };
         const parsed = JSON.parse(stored);
+        // 舊模式遷移：♥♦ × 10,J,Q,K → 強制使用新預設 ♠♥♦♣ × A,2
+        const isLegacyConfig = (
+            Array.isArray(parsed.suits) &&
+            parsed.suits.length === 2 &&
+            parsed.suits.includes('♥') && parsed.suits.includes('♦') &&
+            Array.isArray(parsed.ranks) &&
+            parsed.ranks.some(r => ['10','J','Q','K','T'].includes(r))
+        );
+        if (isLegacyConfig) {
+            window.localStorage.removeItem(SIGNAL_STORAGE_KEY);
+            return { ...SIGNAL_DEFAULT_CONFIG };
+        }
         const sanitized = sanitizeSignalConfig(parsed);
         return {
             suits: sanitized.suits,
@@ -728,9 +740,9 @@ function ensureNoBannedBankerSixRound(rounds, segment) {
             }
         }
     }
-    // 連續莊/閒大於 6 局也視為違規
+    // 連續莊/閒大於 6 局一律重新生成
     if (hasLongStreak(rounds, segment, 6)) {
-        throw new Error('出現連續 5 局以上的莊或閒，重新生成');
+        throw new Error('出現連續 7 局以上的莊或閒，重新生成');
     }
 }
 
@@ -1129,6 +1141,9 @@ function findValidDealOrderForCards(cards, options = {}) {
     const preserveResult = Object.prototype.hasOwnProperty.call(options, 'preserveResult')
         ? options.preserveResult
         : null;
+    const requireValidColor = Object.prototype.hasOwnProperty.call(options, 'requireValidColor')
+        ? Boolean(options.requireValidColor)
+        : false;
 
     const used = new Array(n).fill(false);
     const perm = new Array(n);
@@ -1165,6 +1180,10 @@ function findValidDealOrderForCards(cards, options = {}) {
                 }
                 if (hasFullHouse({ cards: ordered })) return;
             }
+            if (requireValidColor) {
+                const colors4 = ordered.slice(0, 4).map(c => (c && c.back_color) ? c.back_color : '?').join('');
+                if (colors4 !== 'RRRB' && colors4 !== 'BBBR') return;
+            }
             found = ordered;
             return;
         }
@@ -1191,10 +1210,14 @@ function findQualifiedSensitiveOrder(cards, options = {}) {
     const preserveResult = Object.prototype.hasOwnProperty.call(options, 'preserveResult')
         ? options.preserveResult
         : null;
+    const requireValidColor = Object.prototype.hasOwnProperty.call(options, 'requireValidColor')
+        ? Boolean(options.requireValidColor)
+        : false;
 
     const ordered = findValidDealOrderForCards(cards, {
         requireSwap: true,
         requireSensitive: true,
+        requireValidColor,
         preserveResult
     });
 
@@ -2729,43 +2752,37 @@ function verifyShoeRules(rounds, options = {}) {
         }
     }
 
-    // 規則 7: 檢查並修復連續 5 局以上都是莊或閒的問題
+    // 規則 7: 檢查連續莊/閒（最多允許2段連續6局，超過直接視為違規）
     log('--- 連續莊/閒局數檢查 ---', 'info');
-    if (allowMutations) {
-        const bankerPlayerFixResult = autoFixConsecutiveBankerPlayerIssues(rounds);
-
-        if (bankerPlayerFixResult.unfixed.length > 0) {
-            log(`⚠️ 發現 ${bankerPlayerFixResult.unfixed.length} 個無法自動修復的連續莊/閒區塊，請手動調整`, 'warn');
-            bankerPlayerFixResult.unfixed.forEach(block => {
-                const sideLabel = block.side === '莊' ? '莊' : '閒';
-                log(`違規(7): 第 ${block.startIdx + 1}~${block.endIdx + 1} 局連續 ${block.count} 局都是${sideLabel}（超過限制 5 局）`, 'error');
-                for (let idx = block.startIdx; idx <= block.endIdx; idx++) {
-                    violationRoundIndexes.add(idx);
+    {
+        const allBlocks = findConsecutiveBankerPlayerBlocks(rounds);
+        // 連續7局以上一律違規；5-6局最多允許2段
+        const violationBlocks = [];
+        let allowedStreaks = 0;
+        for (const block of allBlocks) {
+            if (block.count >= 7) {
+                violationBlocks.push(block);
+            } else {
+                allowedStreaks++;
+                if (allowedStreaks > 2) {
+                    violationBlocks.push(block);
                 }
-            });
-            errors += bankerPlayerFixResult.unfixed.length;
-        } else if (bankerPlayerFixResult.swapped.length > 0) {
-            log(`✅ 已自動修復 ${bankerPlayerFixResult.swapped.length} 個連續莊/閒區塊`, 'success');
-            if (typeof window !== 'undefined') {
-                window.__roundsModified = true;
             }
-        } else {
-            log('檢查通過：沒有連續 5 局以上都是莊或閒的情況。', 'info');
         }
-    } else {
-        const blocks = findConsecutiveBankerPlayerBlocks(rounds);
-        if (blocks.length > 0) {
-            log(`⚠️ 發現 ${blocks.length} 個連續莊/閒違規區塊(未自動修復)，請手動調整`, 'warn');
-            blocks.forEach(block => {
+
+        if (violationBlocks.length > 0) {
+            log(`⚠️ 發現 ${violationBlocks.length} 個連續莊/閒違規區塊（超過允許的2段）`, 'warn');
+            violationBlocks.forEach(block => {
                 const sideLabel = block.side === '莊' ? '莊' : '閒';
-                log(`違規(7): 第 ${block.startIdx + 1}~${block.endIdx + 1} 局連續 ${block.count} 局都是${sideLabel}（超過限制 5 局）`, 'error');
+                log(`違規(7): 第 ${block.startIdx + 1}~${block.endIdx + 1} 局連續 ${block.count} 局都是${sideLabel}`, 'error');
                 for (let idx = block.startIdx; idx <= block.endIdx; idx++) {
                     violationRoundIndexes.add(idx);
                 }
             });
-            errors += blocks.length;
+            errors += violationBlocks.length;
         } else {
-            log('檢查通過：沒有連續 5 局以上都是莊或閒的情況。', 'info');
+            const allowedInfo = allBlocks.length > 0 ? `（允許範圍內 ${allBlocks.length} 段）` : '';
+            log(`檢查通過：連續莊/閒在允許範圍內${allowedInfo}`, 'info');
         }
     }
 
@@ -3149,6 +3166,19 @@ async function generateShoe() {
                     if (!preflightLimits.okFourCard && preflightLimits.fourCardRateLimit) {
                         log(`🔍 ⚠️ 4張局比例超過上限（${four.rate.toFixed(1)}% > ${preflightLimits.fourCardRateLimit}%），重新生成...`, 'warn');
                     }
+                    result = null;
+                    continue;
+                }
+            }
+
+            // 7. 七點逆轉上限檢查（含非敏感局）
+            const max7PtInput = document.getElementById('max7PtReversal');
+            const max7PtLimit = max7PtInput && max7PtInput.value !== '' ? parseInt(max7PtInput.value) : null;
+            if (max7PtLimit !== null) {
+                const rev7 = count7PtReversals(roundsToCheck);
+                log(`🔍 七點逆轉檢查：${rev7.count} 局（上限=${max7PtLimit}）`, 'info');
+                if (rev7.count > max7PtLimit) {
+                    log(`第 ${attempt} 次生成失敗：七點逆轉 ${rev7.count} 局 > 上限 ${max7PtLimit}，重新生成...`, 'warn');
                     result = null;
                     continue;
                 }
@@ -3830,8 +3860,9 @@ function calculateViolationStats(rounds) {
     const fourCardBlocks = findConsecutiveFourCardBlocks(rounds);
     const fourCardViolations = fourCardBlocks.length;
 
-    // 3. 計算連續 5 局莊或閒違規
-    const streakBlocks = (() => {
+    // 3. 計算連續莊或閒違規
+    // 規則：最多接受2段連續6局，連續7局以上一律違規，超過2段的也算違規
+    const allStreakBlocks = (() => {
         const blocks = [];
         let currentSide = null; // '莊' 或 '閒'
         let consecutiveCount = 0;
@@ -3839,7 +3870,6 @@ function calculateViolationStats(rounds) {
         for (let i = 0; i < rounds.length; i++) {
             const side = getTrueResult(rounds[i]);
             if (side !== '莊' && side !== '閒') {
-                // 和局打斷連續計數
                 if (consecutiveCount >= 5) {
                     blocks.push({ startIdx: blockStart, endIdx: i - 1, count: consecutiveCount, side: currentSide });
                 }
@@ -3864,6 +3894,21 @@ function calculateViolationStats(rounds) {
         }
         return blocks;
     })();
+    // 連續7局以上一律違規；5-6局最多允許2段，超過的算違規
+    const streakBlocks = [];
+    let allowedCount = 0;
+    for (const block of allStreakBlocks) {
+        if (block.count >= 7) {
+            // 連續7局以上一律違規
+            streakBlocks.push(block);
+        } else {
+            // 5-6局：前2段允許，之後算違規
+            allowedCount++;
+            if (allowedCount > 2) {
+                streakBlocks.push(block);
+            }
+        }
+    }
     const streakViolations = streakBlocks.length;
 
     // 4. 計算藍底張數違規（卡牌張數 ≠ 莊家使用張數 + 閒家使用張數）
@@ -4016,7 +4061,27 @@ function updateViolationUI(stats) {
         }
     }
 
-    // 4. 其他違規（張數不符 + 無法對調 + 卡色）
+    // 4. 無法對調違規
+    const cannotSwapEl = document.getElementById('cannotSwapViolationDetail');
+    const cannotSwapCard = cannotSwapEl ? cannotSwapEl.closest('.violation-card') : null;
+    if (cannotSwapEl) {
+        if (stats.cannotSwapViolations > 0) {
+            const rounds = stats.cannotSwapRounds || [];
+            cannotSwapEl.textContent = rounds.length > 0 ? `第 ${rounds.join(', ')} 局` : `${stats.cannotSwapViolations} 處`;
+            if (cannotSwapCard) {
+                cannotSwapCard.classList.remove('no-violation');
+                cannotSwapCard.classList.add('has-violation');
+            }
+        } else {
+            cannotSwapEl.textContent = '無';
+            if (cannotSwapCard) {
+                cannotSwapCard.classList.remove('has-violation');
+                cannotSwapCard.classList.add('no-violation');
+            }
+        }
+    }
+
+    // 5. 其他違規（張數不符 + 卡色）
     const otherEl = document.getElementById('otherViolationDetail');
     const otherCard = otherEl ? otherEl.closest('.violation-card') : null;
     if (otherEl) {
@@ -4026,12 +4091,6 @@ function updateViolationUI(stats) {
         if (stats.cardCountMismatchViolations > 0) {
             const rounds = stats.cardCountMismatchRounds || [];
             parts.push(`張數:${rounds.length > 0 ? rounds.join(',') : stats.cardCountMismatchViolations}`);
-        }
-
-        // 無法對調
-        if (stats.cannotSwapViolations > 0) {
-            const rounds = stats.cannotSwapRounds || [];
-            parts.push(`對調:${rounds.length > 0 ? rounds.join(',') : stats.cannotSwapViolations}`);
         }
 
         // 卡色（只在已檢查時顯示）
@@ -4083,6 +4142,10 @@ function updateViolationUI(stats) {
 function refreshViolationStats() {
     if (typeof currentRounds !== 'undefined' && currentRounds) {
         const stats = calculateViolationStats(currentRounds);
+        // 計算無法對調違規
+        const cannotSwapResult = calculateCannotSwapViolations(currentRounds);
+        stats.cannotSwapViolations = cannotSwapResult.count;
+        stats.cannotSwapRounds = cannotSwapResult.rounds;
         updateViolationUI(stats);
     } else {
         updateViolationUI(null);
@@ -4106,6 +4169,51 @@ function updateRecoveryDisplay(result) {
     immediateEl.textContent = `${result.immediateRecovery}點 (${result.immediatePercent}%)`;
 
     card.style.display = 'inline-block';
+}
+
+// ════════════════════════════════════════════════════════════════
+// 七點逆轉計算
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * 計算牌靴中七點逆轉的局數
+ * 七點逆轉：一方初始7點，但對方補牌後反而贏了
+ * @param {Array} rounds - 局數陣列
+ * @returns {Object} { count, details }
+ */
+function count7PtReversals(rounds) {
+    if (!Array.isArray(rounds)) return { count: 0, details: [] };
+    const details = [];
+    for (let i = 0; i < rounds.length; i++) {
+        const round = rounds[i];
+        if (!round || !Array.isArray(round.cards) || round.cards.length < 5) continue;
+        const result = round.result;
+        if (!result || result === '和') continue;
+
+        const getPoint = (card) => {
+            if (!card) return 0;
+            const rank = card.rank || card.value;
+            if (['K', 'Q', 'J', 'T', '10', '0'].includes(rank)) return 0;
+            if (rank === 'A' || rank === '1') return 1;
+            return parseInt(rank) || 0;
+        };
+
+        const c = round.cards;
+        const pi = (getPoint(c[0]) + getPoint(c[2])) % 10; // 閒初始
+        const bi = (getPoint(c[1]) + getPoint(c[3])) % 10; // 莊初始
+
+        // 排除天牌
+        if (pi >= 8 || bi >= 8) continue;
+        // 必須有一方是7
+        if (pi !== 7 && bi !== 7) continue;
+
+        const who7 = pi === 7 ? '閒' : '莊';
+        const rev = (who7 === '閒' && result === '莊') || (who7 === '莊' && result === '閒');
+        if (rev) {
+            details.push({ roundIndex: i, who7, result });
+        }
+    }
+    return { count: details.length, details };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -4202,11 +4310,24 @@ function distributeRemainingCards(rounds, remainingCards) {
             };
             if (idx === lastRoundIndex) {
                 copiedRound.segment = 'A';
-                // 重新計算結果（避免殘牌標記）
-                const computed = computeRoundResult(copiedRound.cards);
-                if (computed) {
-                    copiedRound.result = computed.result;
-                    log(`  → 最後一局結果更新為：${computed.result}`, 'info');
+                // 嘗試找符合敏感局+卡色的排列
+                const sensCandidate = findQualifiedSensitiveOrder(copiedRound.cards, { requireValidColor: true });
+                if (sensCandidate) {
+                    copiedRound.cards = sensCandidate.ordered.map((c, pos) => {
+                        if (c && typeof c.clone === 'function') return c.clone(pos);
+                        return { ...c, pos };
+                    });
+                    copiedRound.result = sensCandidate.result;
+                    copiedRound.sensitive = true;
+                    copiedRound.swap_info = sensCandidate.swap_info || null;
+                    log(`  → 最後一局重排為敏感局，結果：${sensCandidate.result}`, 'info');
+                } else {
+                    // 找不到敏感排列時退回原本計算
+                    const computed = computeRoundResult(copiedRound.cards);
+                    if (computed) {
+                        copiedRound.result = computed.result;
+                        log(`  → 最後一局無法排出敏感局，結果更新為：${computed.result}（可能需要修復）`, 'warn');
+                    }
                 }
             }
             return copiedRound;
@@ -4278,9 +4399,19 @@ function distributeRemainingCards(rounds, remainingCards) {
                 failedAttempts < allRemainingCards.length
             ) {
                 const cardToAdd = allRemainingCards.shift();
-                const candidate = findQualifiedSensitiveOrder([...round.cards, cardToAdd]);
+                const candidate = findQualifiedSensitiveOrder([...round.cards, cardToAdd], { requireValidColor: true });
 
                 if (candidate) {
+                    // 訊號牌違規檢查：若補牌後此局含訊號牌，下一局必須是莊
+                    const hasSignal = candidate.ordered.some(c => c && isSignalCardByConfig(c));
+                    const nextRound = updatedRounds[i + 1];
+                    if (hasSignal && nextRound && nextRound.result !== '莊') {
+                        allRemainingCards.push(cardToAdd);
+                        failedAttempts++;
+                        log(`  ✗ ${formatCardLabel(cardToAdd)} 補入後有訊號牌但下一局(${i + 2})非莊，改試下一張`, 'warn');
+                        continue;
+                    }
+
                     round.cards = candidate.ordered;
                     round.result = candidate.result;
                     round.sensitive = true;
@@ -4293,7 +4424,7 @@ function distributeRemainingCards(rounds, remainingCards) {
                 } else {
                     allRemainingCards.push(cardToAdd);
                     failedAttempts++;
-                    log(`  ✗ ${formatCardLabel(cardToAdd)} 無法讓第 ${i + 1} 局維持敏感局，改試下一張`, 'warn');
+                    log(`  ✗ ${formatCardLabel(cardToAdd)} 無法讓第 ${i + 1} 局維持敏感局（含卡色/訊號牌），改試下一張`, 'warn');
                 }
             }
 
@@ -4524,7 +4655,9 @@ function checkViolationsBeforeExport() {
     const stats = calculateViolationStats(currentRounds);
 
     // 新增：計算無法對調違規
-    stats.cannotSwapViolations = calculateCannotSwapViolations(currentRounds);
+    const cannotSwapResult = calculateCannotSwapViolations(currentRounds);
+    stats.cannotSwapViolations = cannotSwapResult.count;
+    stats.cannotSwapRounds = cannotSwapResult.rounds;
 
     // 新增：計算卡色違規
     const cardColorRounds = collectCardColorViolationRounds(currentRounds);
@@ -4545,10 +4678,11 @@ function checkViolationsBeforeExport() {
 
 function calculateCannotSwapViolations(rounds) {
     if (!Array.isArray(rounds) || rounds.length === 0) {
-        return 0;
+        return { count: 0, rounds: [] };
     }
 
     let cannotSwapCount = 0;
+    const cannotSwapRoundNums = [];
 
     for (let i = 0; i < rounds.length; i++) {
         const round = rounds[i];
@@ -4558,6 +4692,7 @@ function calculateCannotSwapViolations(rounds) {
         const canComplete = canCompleteGame(round);
         if (!canComplete) {
             cannotSwapCount++;
+            cannotSwapRoundNums.push(i + 1);
             continue;
         }
 
@@ -4565,10 +4700,11 @@ function calculateCannotSwapViolations(rounds) {
         const swappedResult = swapFirstTwoCards(round);
         if (swappedResult === null) {
             cannotSwapCount++;
+            cannotSwapRoundNums.push(i + 1);
         }
     }
 
-    return cannotSwapCount;
+    return { count: cannotSwapCount, rounds: cannotSwapRoundNums };
 }
 
 function collectCardColorViolationRounds(rounds) {
@@ -4601,7 +4737,7 @@ function showViolationConfirmDialog(stats) {
         if (stats.fourCardViolations > 0)
             message += `• 連續5局4張牌違規: ${stats.fourCardViolations} 處\n`;
         if (stats.streakViolations > 0)
-            message += `• 連續5局莊/閒違規: ${stats.streakViolations} 處\n`;
+            message += `• 連續莊/閒違規: ${stats.streakViolations} 處\n`;
         if (stats.cardCountMismatchViolations > 0)
             message += `• 藏底張數違規: ${stats.cardCountMismatchViolations} 處\n`;
         if (stats.cannotSwapViolations > 0)
@@ -4648,7 +4784,19 @@ async function exportRoundsAsExcelWithDrive() {
 
         // === 工作表1:預覽 === (完全保留原始代碼)
         const ws1 = wb.addWorksheet('預覽');
-        ws1.properties.defaultRowHeight = 36;
+
+        const COLS = 21;
+        const ROWS = PREVIEW_GRID_ROWS;
+        const GROUP = PREVIEW_GRID_GROUP;
+
+        // 計算實際 Excel 欄數（含分隔欄）
+        const totalSheetCols = COLS + Math.floor((COLS - 1) / GROUP);  // 21 + 2 = 23
+        const lastColStr = totalSheetCols > 26
+            ? String.fromCharCode(64 + Math.floor((totalSheetCols - 1) / 26)) + String.fromCharCode(65 + ((totalSheetCols - 1) % 26))
+            : String.fromCharCode(64 + totalSheetCols);
+
+        // A4 直向列印設定 — 剛好佔滿一頁
+        ws1.properties.defaultRowHeight = 56;
         ws1.pageSetup = {
             paperSize: 9,
             orientation: 'portrait',
@@ -4656,23 +4804,23 @@ async function exportRoundsAsExcelWithDrive() {
             fitToWidth: 1,
             fitToHeight: 1,
             horizontalCentered: true,
-            verticalCentered: true,
-            margins: { left: 0.1, right: 0.1, top: 0.12, bottom: 0.12, header: 0.1, footer: 0.1 }
+            verticalCentered: false,
+            margins: { left: 0.15, right: 0.15, top: 0.15, bottom: 0.15, header: 0.0, footer: 0.0 }
         };
 
-        const COLS = 21;
-        const ROWS = PREVIEW_GRID_ROWS;
-        const GROUP = PREVIEW_GRID_GROUP;
+        // 欄寬：資料欄大幅加寬確保撐滿 A4 寬度，分隔欄極窄
         const columnWidths = [];
         for (let colIndex = 0; colIndex < COLS; colIndex++) {
-            columnWidths.push(4);
+            columnWidths.push(9);
             if ((colIndex + 1) % GROUP === 0 && colIndex < COLS - 1) {
-                columnWidths.push(1);
+                columnWidths.push(1.5);
             }
         }
         columnWidths.forEach((width, index) => {
             ws1.getColumn(index + 1).width = width;
         });
+        // 設定列印範圍
+        ws1.pageSetup.printArea = `A1:${lastColStr}${ROWS}`;
 
         const borderThin = { style: 'thin', color: { argb: 'FF333333' } };
         const borderBold = { style: 'medium', color: { argb: 'FFFF4D4F' } };
@@ -4688,7 +4836,7 @@ async function exportRoundsAsExcelWithDrive() {
                 const wsCell = ws1.getCell(r + 1, sheetCol);
                 wsCell.value = cellData.value || '';
                 wsCell.alignment = { vertical: 'middle', horizontal: 'center' };
-                wsCell.font = { size: 22, bold: true, color: { argb: 'FF000000' } };
+                wsCell.font = { name: 'Microsoft JhengHei', size: 36, bold: true, color: { argb: 'FF000000' } };
                 wsCell.border = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
 
                 const classes = cellData.className || '';
@@ -4700,18 +4848,20 @@ async function exportRoundsAsExcelWithDrive() {
                     wsCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
                 } else if (classes.includes('card-red')) {
                     wsCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
+                    wsCell.font = { ...wsCell.font, color: { argb: 'FF000000' } };
                 } else if (classes.includes('card-blue')) {
-                    wsCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00FFFF' } };
+                    wsCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00CFCF' } };
+                    wsCell.font = { ...wsCell.font, color: { argb: 'FFFFFFFF' } };
                 }
                 if (classes.includes('signal-match')) {
                     wsCell.font = { ...wsCell.font, color: { argb: 'FFDC3545' } };
                 }
                 if (isBankerResult) {
-                    wsCell.font = { ...wsCell.font, color: { argb: 'FFCC3333' } };
+                    wsCell.font = { ...wsCell.font, color: { argb: 'FFCC0000' } };
                 } else if (isPlayerResult) {
-                    wsCell.font = { ...wsCell.font, color: { argb: 'FF0052CC' } };
+                    wsCell.font = { ...wsCell.font, color: { argb: 'FF0033AA' } };
                 } else if (isTieResult) {
-                    wsCell.font = { ...wsCell.font, color: { argb: 'FF2E8B57' } };
+                    wsCell.font = { ...wsCell.font, color: { argb: 'FF006633' } };
                 }
                 if (classes.includes('tbox-left')) wsCell.border.left = borderBold;
                 if (classes.includes('tbox-right')) wsCell.border.right = borderBold;

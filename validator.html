@@ -33,6 +33,7 @@
 
   <div class="row" id="driveInput" style="display:none;">
     <button id="loadDrive">載入雲端檔案清單</button>
+    <select id="driveFolders" style="min-width:200px;"><option value="">根目錄</option></select>
     <select id="driveFiles" style="min-width:300px;"></select>
     <button id="runDrive">驗算選取檔案</button>
   </div>
@@ -55,6 +56,7 @@
     const $summary = document.getElementById('summary');
     const $issues = document.getElementById('issues');
     const $loadDrive = document.getElementById('loadDrive');
+    const $driveFolders = document.getElementById('driveFolders');
     const $driveFiles = document.getElementById('driveFiles');
     const $runDrive = document.getElementById('runDrive');
     const $fileInput = document.getElementById('fileInput');
@@ -138,9 +140,11 @@
       
       let pTotal = calcPoint(playerCards);
       let bTotal = calcPoint(bankerCards);
-      
+      const playerInitial = pTotal;
+      const bankerInitial = bTotal;
+
       const natural = (pTotal >= 8 || bTotal >= 8);
-      
+
       if (!natural) {
         // 閒家補牌
         if (pTotal <= 5) {
@@ -217,10 +221,13 @@
       // 檢查是否為三條局
       const isFullHouse = hasFullHouse(cards);
 
-      return { 
-        result, 
-        pTotal, 
-        bTotal, 
+      return {
+        result,
+        pTotal,
+        bTotal,
+        playerInitial,
+        bankerInitial,
+        natural,
         usedCardCount,
         sensitive,
         swappedResult,
@@ -493,6 +500,7 @@
         
         const roundResults = []; // 儲存所有局的驗證結果
         const roundsForRecovery = []; // 依檔案內容重建牌靴（供回復分析）
+        const sevenPtResults = []; // 7點逆轉分析
         
         for (let r = 2; r <= ws.rowCount; r++) {
           const row = ws.getRow(r);
@@ -578,6 +586,22 @@
               cardCount: cardLabels.length
             });
 
+            // 7點逆轉分析
+            if (!validation.natural && validation.result !== '和' && cardLabels.length >= 5) {
+              const pi = validation.playerInitial;
+              const bi = validation.bankerInitial;
+              if (pi === 7 || bi === 7) {
+                const who7 = pi === 7 ? '閒' : '莊';
+                const rev = (who7 === '閒' && validation.result === '莊') || (who7 === '莊' && validation.result === '閒');
+                sevenPtResults.push({
+                  roundNo, who7, rev,
+                  pi, bi,
+                  pf: validation.pTotal, bf: validation.bTotal,
+                  result: validation.result
+                });
+              }
+            }
+
             // 回復分析以檔案內的牌序/分局為準
             const parsed = parsedCards.filter(c => c && c.ok);
             if (parsed.length === cardLabels.length) {
@@ -653,6 +677,38 @@
           summaryText += `<br><br><b>回復分析：</b><br><span class="muted">略過（有錯誤或資料不足）</span>`;
         }
 
+        // 7點逆轉分析
+        if (sevenPtResults.length > 0) {
+          const totalSeven = sevenPtResults.length;
+          const revCount = sevenPtResults.filter(r => r.rev).length;
+          const p7 = sevenPtResults.filter(r => r.who7 === '閒');
+          const b7 = sevenPtResults.filter(r => r.who7 === '莊');
+          const p7r = p7.filter(r => r.rev).length;
+          const b7r = b7.filter(r => r.rev).length;
+          const rate = (revCount / totalSeven * 100).toFixed(1);
+
+          summaryText += `<br><br><b>7點逆轉分析：</b>`;
+          summaryText += `<br>7點局數：${totalSeven}　逆轉：${revCount}　逆轉率：${rate}%`;
+          if (p7.length > 0) summaryText += `<br>閒7：${p7r}/${p7.length} (${(p7r / p7.length * 100).toFixed(1)}%)`;
+          if (b7.length > 0) summaryText += `<br>莊7：${b7r}/${b7.length} (${(b7r / b7.length * 100).toFixed(1)}%)`;
+
+          summaryText += `<table><thead><tr>
+            <th>局號</th><th>7點方</th><th>閒初</th><th>莊初</th><th>閒終</th><th>莊終</th><th>結果</th><th>狀態</th>
+          </tr></thead><tbody>`;
+          for (const r of sevenPtResults) {
+            const mark = r.rev ? '<span class="bad">逆轉</span>' : '<span class="ok">守住</span>';
+            summaryText += `<tr>
+              <td>${esc(r.roundNo)}</td><td>${r.who7}7</td>
+              <td>${r.pi}</td><td>${r.bi}</td>
+              <td>${r.pf}</td><td>${r.bf}</td>
+              <td>${r.result}</td><td>${mark}</td>
+            </tr>`;
+          }
+          summaryText += `</tbody></table>`;
+        } else {
+          summaryText += `<br><br><b>7點逆轉分析：</b><br><span class="muted">無符合條件的7點局</span>`;
+        }
+
         // 顯示問題清單（錯誤/警告）
         let html = '';
         if (issues.length === 0 && warnings.length === 0) {
@@ -718,21 +774,22 @@
     });
 
     // === 雲端硬碟功能 ===
-    $loadDrive.addEventListener('click', async () => {
-      console.log('載入雲端檔案按鈕被點擊');
+    async function loadDriveFiles(folderId) {
       try {
         $summary.textContent = '載入雲端檔案清單...';
-        console.log('開始 fetch:', GOOGLE_APPS_SCRIPT_URL);
-        const response = await fetch(GOOGLE_APPS_SCRIPT_URL);
+        const url = folderId
+          ? `${GOOGLE_APPS_SCRIPT_URL}?folderId=${folderId}`
+          : GOOGLE_APPS_SCRIPT_URL;
+        const response = await fetch(url);
         const result = await response.json();
-        
+
         if (!result.success) {
           throw new Error(result.error || '載入失敗');
         }
-        
+
         const files = result.files || [];
         $driveFiles.innerHTML = '<option value="">請選擇檔案</option>';
-        
+
         files.forEach(file => {
           const date = new Date(file.lastModified).toLocaleString('zh-TW');
           const option = document.createElement('option');
@@ -740,12 +797,42 @@
           option.textContent = `${file.name} (${date})`;
           $driveFiles.appendChild(option);
         });
-        
+
         $summary.innerHTML = `<span class="ok">找到 ${files.length} 個檔案</span>`;
       } catch (e) {
         $summary.innerHTML = `<span class="bad">載入失敗：${esc(e.message)}</span>`;
         console.error(e);
       }
+    }
+
+    $loadDrive.addEventListener('click', async () => {
+      try {
+        // 載入子資料夾清單
+        $summary.textContent = '載入雲端資料夾...';
+        const folderRes = await fetch(`${GOOGLE_APPS_SCRIPT_URL}?action=listFolders`);
+        const folderResult = await folderRes.json();
+
+        if (folderResult.success && folderResult.folders) {
+          $driveFolders.innerHTML = '<option value="">根目錄</option>';
+          folderResult.folders.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.id;
+            opt.textContent = f.name;
+            $driveFolders.appendChild(opt);
+          });
+        }
+
+        // 載入根目錄檔案
+        await loadDriveFiles('');
+      } catch (e) {
+        $summary.innerHTML = `<span class="bad">載入失敗：${esc(e.message)}</span>`;
+        console.error(e);
+      }
+    });
+
+    // 切換資料夾時重新載入檔案
+    $driveFolders.addEventListener('change', () => {
+      loadDriveFiles($driveFolders.value);
     });
 
     $runDrive.addEventListener('click', async () => {
