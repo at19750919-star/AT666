@@ -471,19 +471,27 @@ function showCloudDialog(rootFolders, rootFiles) {
     overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;';
 
     const dialog = document.createElement('div');
-    dialog.style.cssText = 'background:#1a1a2e;border:1px solid #444;border-radius:10px;padding:20px;min-width:480px;max-width:600px;color:#eee;font-family:sans-serif;';
+    dialog.style.cssText = 'background:#1a1a2e;border:1px solid #444;border-radius:10px;padding:20px;min-width:520px;max-width:640px;color:#eee;font-family:sans-serif;';
 
     dialog.innerHTML = `
         <h3 style="margin:0 0 12px;color:#ffd700;">從雲端選擇 Excel 檔案</h3>
         <div id="cloudPath" style="font-size:13px;color:#9ad;margin-bottom:10px;padding:6px 10px;background:#0f1828;border-radius:4px;">📂 新牌</div>
 
         <div id="cloudFolderArea">
-            <label style="display:block;margin-bottom:4px;font-size:13px;color:#aaa;">子資料夾（點擊進入）</label>
+            <label style="display:block;margin-bottom:4px;font-size:13px;color:#aaa;">子資料夾（點擊進入,可跨資料夾累積選檔)</label>
             <div id="cloudFolderList" style="max-height:120px;overflow-y:auto;background:#2a2a4a;border:1px solid #555;border-radius:4px;margin-bottom:12px;"></div>
         </div>
 
-        <label style="display:block;margin-bottom:4px;font-size:13px;color:#aaa;">檔案（可多選，按住 Ctrl/Cmd）</label>
-        <select id="cloudFiles" multiple size="10" style="width:100%;padding:8px;margin-bottom:16px;background:#2a2a4a;color:#eee;border:1px solid #555;border-radius:4px;font-size:14px;"></select>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <label style="font-size:13px;color:#aaa;">檔案(勾選,跨資料夾累積)</label>
+            <span style="font-size:12px;">
+                <a href="#" id="cloudSelectAll" style="color:#4fc3f7;">全選此頁</a> /
+                <a href="#" id="cloudClearAll" style="color:#ff9800;">清空所選</a>
+            </span>
+        </div>
+        <div id="cloudFileList" style="max-height:280px;overflow-y:auto;background:#2a2a4a;border:1px solid #555;border-radius:4px;margin-bottom:12px;font-size:13px;"></div>
+
+        <div id="cloudSelectedSummary" style="font-size:13px;color:#9ad;margin-bottom:12px;padding:6px 10px;background:#0f2a1f;border-radius:4px;">已選 0 個檔案</div>
 
         <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;">
             <button id="cloudBack" style="padding:8px 16px;background:#37495e;color:#eee;border:none;border-radius:4px;cursor:pointer;font-size:14px;display:none;">← 回新牌(根目錄)</button>
@@ -499,27 +507,59 @@ function showCloudDialog(rootFolders, rootFiles) {
     const pathDiv = dialog.querySelector('#cloudPath');
     const folderArea = dialog.querySelector('#cloudFolderArea');
     const folderList = dialog.querySelector('#cloudFolderList');
-    const fileSelect = dialog.querySelector('#cloudFiles');
+    const fileList = dialog.querySelector('#cloudFileList');
     const backBtn = dialog.querySelector('#cloudBack');
+    const summaryDiv = dialog.querySelector('#cloudSelectedSummary');
 
-    // 渲染檔案清單
-    function renderFiles(files) {
-        if (files.length === 0) {
-            fileSelect.innerHTML = '<option disabled>(此資料夾沒有 Excel 檔案)</option>';
+    // 跨資料夾累積選擇:id -> { id, name, folder }
+    const selectedFiles = new Map();
+    let currentFolderName = '新牌';
+    let currentFiles = [];
+
+    function updateSummary() {
+        const n = selectedFiles.size;
+        if (n === 0) {
+            summaryDiv.innerHTML = '已選 0 個檔案';
         } else {
-            fileSelect.innerHTML = files.map(f => {
-                const date = new Date(f.lastModified).toLocaleString('zh-TW');
-                return `<option value="${f.id}" data-name="${f.name}">${f.name} (${date})</option>`;
-            }).join('');
+            const names = Array.from(selectedFiles.values()).map(f => f.name).slice(0, 5).join('、');
+            const more = n > 5 ? `…等 ${n} 個` : '';
+            summaryDiv.innerHTML = `<b style="color:#4caf50">已選 ${n} 個檔案</b>:${names}${more ? ' ' + more : ''}`;
         }
     }
 
-    // 渲染子資料夾清單（可點擊）
-    function renderFolders(folders) {
-        if (folders.length === 0) {
-            folderArea.style.display = 'none';
+    // 渲染檔案清單(checkbox + 名字,checkbox 狀態根據 selectedFiles 設定)
+    function renderFiles(files) {
+        currentFiles = files;
+        if (files.length === 0) {
+            fileList.innerHTML = '<div style="padding:12px;color:#888;text-align:center;">(此資料夾沒有 Excel 檔案)</div>';
             return;
         }
+        fileList.innerHTML = files.map(f => {
+            const date = new Date(f.lastModified).toLocaleString('zh-TW');
+            const checked = selectedFiles.has(f.id) ? 'checked' : '';
+            return `<label class="cloud-file-row" style="display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;border-bottom:1px solid #1f2a44;">
+                <input type="checkbox" data-id="${f.id}" data-name="${f.name}" ${checked} style="cursor:pointer;">
+                <span style="flex:1;">${f.name}</span>
+                <span style="color:#888;font-size:11px;">${date}</span>
+            </label>`;
+        }).join('');
+        fileList.querySelectorAll('input[type=checkbox]').forEach(cb => {
+            cb.onchange = () => {
+                const id = cb.dataset.id;
+                const name = cb.dataset.name;
+                if (cb.checked) {
+                    selectedFiles.set(id, { id, name, folder: currentFolderName });
+                } else {
+                    selectedFiles.delete(id);
+                }
+                updateSummary();
+            };
+        });
+    }
+
+    // 渲染子資料夾清單
+    function renderFolders(folders) {
+        if (folders.length === 0) { folderArea.style.display = 'none'; return; }
         folderArea.style.display = '';
         folderList.innerHTML = folders.map(f =>
             `<div class="cloud-folder-item" data-id="${f.id}" data-name="${f.name}" style="padding:8px 10px;cursor:pointer;border-bottom:1px solid #1f2a44;font-size:14px;">📁 ${f.name}</div>`
@@ -531,40 +571,52 @@ function showCloudDialog(rootFolders, rootFiles) {
         });
     }
 
-    // 進入子資料夾
     async function enterFolder(folderId, folderName) {
+        currentFolderName = folderName;
         pathDiv.textContent = `📂 新牌 / ${folderName}`;
         backBtn.style.display = '';
-        folderArea.style.display = 'none';   // GAS 只支援一級子資料夾，進去後不能再列子層
-        fileSelect.innerHTML = '<option disabled>載入中...</option>';
+        folderArea.style.display = 'none';   // GAS 只支援一級子資料夾,進去後不能再列子層
+        fileList.innerHTML = '<div style="padding:12px;color:#888;text-align:center;">載入中...</div>';
         try {
             const files = await fetchFiles(folderId);
             renderFiles(files);
         } catch (e) {
-            fileSelect.innerHTML = `<option disabled>載入失敗: ${e.message}</option>`;
+            fileList.innerHTML = `<div style="padding:12px;color:#f44;text-align:center;">載入失敗: ${e.message}</div>`;
         }
     }
 
-    // 回到根目錄
     backBtn.onclick = () => {
+        currentFolderName = '新牌';
         pathDiv.textContent = '📂 新牌';
         backBtn.style.display = 'none';
         renderFolders(rootFolders);
         renderFiles(rootFiles);
     };
 
-    // 初始狀態：根目錄
+    // 全選此頁/清空所選
+    dialog.querySelector('#cloudSelectAll').onclick = (e) => {
+        e.preventDefault();
+        currentFiles.forEach(f => selectedFiles.set(f.id, { id: f.id, name: f.name, folder: currentFolderName }));
+        renderFiles(currentFiles);  // 重新渲染以更新 checkbox
+        updateSummary();
+    };
+    dialog.querySelector('#cloudClearAll').onclick = (e) => {
+        e.preventDefault();
+        selectedFiles.clear();
+        renderFiles(currentFiles);
+        updateSummary();
+    };
+
+    // 初始:根目錄
     renderFolders(rootFolders);
     renderFiles(rootFiles);
+    updateSummary();
 
     dialog.querySelector('#cloudCancel').onclick = () => overlay.remove();
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
     dialog.querySelector('#cloudOk').onclick = async () => {
-        const selected = Array.from(fileSelect.selectedOptions).map(opt => ({
-            id: opt.value,
-            name: opt.dataset.name || opt.textContent
-        })).filter(s => s.id);
+        const selected = Array.from(selectedFiles.values());
         if (selected.length === 0) { alert('請選擇至少一個檔案'); return; }
         overlay.remove();
         await downloadBatch(selected, true);
