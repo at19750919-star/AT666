@@ -321,19 +321,36 @@ async function uploadAllToDrive() {
         tRow.font = { bold: true, color: { argb: 'FF1565C0' } };
         tRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE3F2FD' } };
 
-        // 合計列（多檔時）— 放在理論機率正下方，方便對照
+        // 合計列(多檔時)— 放在理論機率正下方,方便對照
+        // 改用 Excel 公式:資料增/刪時自動更新(範圍寫到 row 1000,推測夠用)
         if (allStats.length > 1) {
-            const totalSum = allStats.reduce((s, st) => s + st.totalRounds, 0);
-            const tieSum = allStats.reduce((s, st) => s + st.tieCount, 0);
+            const SUM_END = 1000;     // SUM 公式結束列(留大範圍讓 user 自由增刪資料列)
+            const DATA_START = 5;     // 資料列從第 5 列開始(1-2 標題、3 理論、4 合計)
+            const colLetter = (n) => {
+                let s = '';
+                while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; }
+                return s;
+            };
+            // V 欄(總局數,col 22)的公式,合計 % 用這個當分母
+            const totalFormula = `SUM(V${DATA_START}:V${SUM_END})`;
             const sumRow = ['合計'];
-            for (let i = 1; i <= 9; i++) {
-                const cnt = allStats.reduce((s, st) => s + st.pointWins[i], 0);
-                sumRow.push(cnt, totalSum > 0 ? cnt / totalSum : 0);
+            for (let i = 0; i < 10; i++) {  // 9 個點數 + 和局 = 10 個區塊
+                const countCol = 2 + i * 2;       // B=2, D=4, ..., T=20
+                const countLetter = colLetter(countCol);
+                // 局數欄:SUM 該欄
+                sumRow.push({ formula: `SUM(${countLetter}${DATA_START}:${countLetter}${SUM_END})` });
+                // % 欄:該欄 SUM / V 欄 SUM(用 IFERROR 避開除以 0)
+                sumRow.push({ formula: `IFERROR(SUM(${countLetter}${DATA_START}:${countLetter}${SUM_END})/${totalFormula},0)` });
             }
-            sumRow.push(tieSum, totalSum > 0 ? tieSum / totalSum : 0, totalSum);
+            // V 欄(總局數)合計
+            sumRow.push({ formula: totalFormula });
             const addedRow = ws.addRow(sumRow);
             addedRow.font = { bold: true };
             addedRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3E0' } };
+            // 合計列的 % 欄(第 3, 5, 7, ..., 21 欄)直接設百分比格式(因 cell.value 是 formula 物件,後面 numFmt 迴圈會跳過)
+            for (let i = 0; i < 10; i++) {
+                addedRow.getCell(3 + i * 2).numFmt = '0.000%';
+            }
         }
 
         // 每個檔案一列：% 欄存原始小數（cnt/n）
